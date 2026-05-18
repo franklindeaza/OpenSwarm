@@ -135,18 +135,12 @@ async def generate_post(req: GeneratePostRequest):
             )
 
         prompt += (
-            "\n🚨 FLOW OBLIGATORIO 🚨\n"
-            "1. SendMessage al **Brand Director** → recibí el brief creativo en JSON.\n"
-            "2. SendMessage al **Creative Director** con el brief. INSISTÍ:\n"
-            "   - DEBE usar tool 'BrowseAssets' para buscar foto REAL de persona\n"
-            "     dominicana/latina en contexto médico (NO foto de objeto solo).\n"
-            "   - DEBE usar tool 'StampTextOnImage' para componer texto + logo\n"
-            "     real del doctor + brand colors sobre esa foto.\n"
-            "   - PROHIBIDO usar Image Agent para generar la imagen desde cero\n"
-            "     (Gemini sintetiza personas con artefactos, dedos extra, caras\n"
-            "     raras). Path C (Gemini) es ÚLTIMO recurso documentado.\n"
-            "3. Devuélveme el resultado en JSON:\n"
-            '   {"file_path": "/app/mnt/...", "caption": "...", "hashtags": [...]}'
+            "\nFlow: coordina con Brand Director para crear el brief creativo, "
+            "después con Creative Director para que ejecute el diseño "
+            "(él decide la mejor estrategia con sus tools disponibles o "
+            "delegando al Image Agent según contexto), y finalmente devuélveme "
+            "el path absoluto del PNG generado + caption Instagram + hashtags "
+            'en JSON: {"file_path": "/app/mnt/...", "caption": "...", "hashtags": [...]}'
         )
 
         result = agency.get_response_sync(prompt)

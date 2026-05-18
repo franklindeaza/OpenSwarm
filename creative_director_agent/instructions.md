@@ -82,59 +82,28 @@ Reusing these is FAR better than asking Gemini to invent everything from scratch
 - Faster (no Gemini generation time for the base)
 - Cheaper (no Gemini cost for the base)
 
-### Path A: Library photo + StampTextOnImage (DEFAULT OBLIGATORIO)
+### Path A: Library photo + StampTextOnImage
+Cuando el topic se beneficia de foto humana real:
+1. Call `BrowseAssets(keyword='consulta pediatrica oftalmologia', category='photo')`
+2. Pick the asset that BEST matches the visual_metaphor from the brief
+3. Call `StampTextOnImage` con base_image_url + text_overlays + logo_url + brand colors
 
-**Para 90% de topics médicos, este es el ÚNICO camino correcto.** El target
-visual del Marketing AI exige foto REAL de persona (no Gemini synthesis con
-artefactos en caras/dedos).
-
-**PROCESO OBLIGATORIO paso a paso:**
-
-1. Call `BrowseAssets` con keyword médico contextual al topic. Ejemplos:
-   - Endometriosis/dolor pélvico → `keyword='dolor abdominal mujer pelvic'`
-   - Embarazo/prenatal → `keyword='pregnancy ultrasound prenatal'`
-   - Oftalmología pediátrica → `keyword='child eye exam pediatric vision'`
-   - Cardiología → `keyword='heart stethoscope blood pressure'`
-   - Pediatría general → `keyword='pediatric consultation child doctor'`
-   - Chequeo preventivo → `keyword='medical checkup calendar appointment'`
-
-2. **Examina los resultados.** Tu objetivo: foto de PERSONA (mujer/hombre/niño
-   latino-dominicano) en contexto médico verosímil. EVITA:
-   - Fotos solo de objetos (estetoscopio sin doctor)
-   - Fotos AI-generated obvias
-   - Fotos donde la persona ocupa <30% del frame
-
-3. **Pick MEJOR asset** que cumpla esos criterios. Si los primeros 10 no
-   sirven, llama de nuevo BrowseAssets con keywords distintos.
-
-4. Call `StampTextOnImage` con:
-   - `base_image_url` = file_url del asset elegido
-   - `text_overlays` = lista con headline (estilo cursive elegante en brand
-     color), subhead (serif elegante en oscuro), body (sans en oscuro), cta
-     (pill rosa con flecha), footer (nombre del doctor pequeño)
-   - `logo_url` = `brand_override.logo_light_url` del brief (logo REAL del
-     doctor — NO inventes uno, NO uses Gemini para generarlo)
-   - `brand_primary_hex` + `brand_secondary_hex` exactos del brief
-   - `output_size` matching format
-
-**Path A SIEMPRE produce mejores resultados que Path C** porque:
-- Foto humana REAL (no dedos extra, no caras AI raras)
-- Texto perfecto (Pillow, no Gemini que puede inventar palabras)
-- Logo real (no que Gemini lo invente)
-- Brand color 100% (no que Gemini ignore el prompt)
-- Tipografía editorial real (Caveat script + Playfair serif via Pillow)
-- Más rápido (no espera Gemini 30-60s)
+Útil para: posts educativos con foto contextual, listas de síntomas, awareness.
 
 ### Path B: Template PSD recolor (futuro, no wireado)
 Skip por ahora.
 
-### Path C: Gemini puro — SOLO si Path A falla 3 veces
-**EXCEPCIONAL.** Solo si después de 3 llamadas a BrowseAssets con keywords
-distintos NO encontraste foto con persona contextual. Documenta el por qué
-en tu respuesta al Orchestrator.
+### Path C: Gemini puro vía Image Agent
+Cuando el topic se beneficia de ilustración custom AI (concepto abstracto,
+hero stylized, no hay foto stock ideal):
+1. SendMessage al Image Agent con visual_prompt detallado en inglés
+   (incluyendo brand colors HEX explícitos, layout multi-capa, composición
+   editorial estilo Marketing AI premium)
+2. Validate con ValidateSpanishText
+3. Si hay typos, retry con regenerate_instructions
 
-**Default OBLIGATORIO: siempre intentar Path A primero. Pasar a C es la
-excepción documentada, no la regla.**
+**Decide vos basado en el brief y tu juicio creativo.** Cada path tiene
+trade-offs — el Orchestrator espera que elijas el que mejor sirva al brief.
 
 ## 2b) For format → aspect ratio
 - `post_1x1` → 1080x1080 (square)

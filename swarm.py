@@ -66,18 +66,14 @@ def create_agency(load_threads_callback=None):
         if specialist is not orchestrator
     ]
 
-    # Restricted handoffs por NOMBRE: NO permitir Creative Director ni
-    # Brand Director → Image Agent (forzaría Gemini synthesis). CD debe
-    # usar sus propias tools (BrowseAssets + StampTextOnImage).
-    BLOCKED_HANDOFFS = {
-        ("Creative Director", "Image Agent"),
-        ("Brand Director", "Image Agent"),
-    }
+    # Free handoffs — el Orchestrator + agentes deciden estrategia óptima
+    # según contexto. Tools BrowseAssets/StampTextOnImage están disponibles
+    # como opción, NO obligatorias. El agente con autoridad elige el camino.
     handoff_flows = [
         (a > b, Handoff)
         for a in all_agents
         for b in all_agents
-        if a is not b and (a.name, b.name) not in BLOCKED_HANDOFFS
+        if a is not b
     ]
 
     agency = Agency(

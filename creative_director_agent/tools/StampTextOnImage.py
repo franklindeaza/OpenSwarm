@@ -219,49 +219,26 @@ class StampTextOnImage(BaseTool):
             white = (255, 255, 255, 255)
             text_dark = (31, 41, 55, 255)
 
-            # 3. Pre-overlay: gradient oscuro semi-transparente en zona donde
-            # va el texto, para garantizar legibilidad cuando la base es foto
-            # compleja. Las fotos Envato tienen mucho detalle y el texto se
-            # vuelve fantasma. Solución: overlay sutil que no tapa la foto
-            # pero da contraste al texto.
-            overlay_layer = Image.new("RGBA", (target_w, target_h), (0, 0, 0, 0))
-            overlay_draw = ImageDraw.Draw(overlay_layer)
-            # Gradient vertical bottom→top opacidad
-            for y in range(target_h):
-                # Más oscuro en la mitad inferior donde suele ir texto
-                t = y / target_h
-                alpha = int(120 * (t ** 1.2))  # 0 arriba, 120 abajo
-                overlay_draw.line([(0, y), (target_w, y)], fill=(*secondary[:3], alpha))
-            base = Image.alpha_composite(base, overlay_layer)
-
-            # 4. Draw overlays
-            # Editorial mode: Headline = brand_primary color SIN box (texto rosa
-            # directo sobre fondo claro, como referencia target). Si el background
-            # es oscuro, agentemente el agente puede pasar color_hex='white' en
-            # el overlay para invertir. Subhead/body en text_dark sin box. CTA
-            # con pill brand. Logo box white para visibility.
+            # 3. Draw overlays
+            # El Creative Director decide colores con color_hex param si quiere.
+            # Defaults usan brand colors para máximo respeto a identidad.
             draw = ImageDraw.Draw(base)
             for o in self.text_overlays:
                 role = o.get("role", "body")
-                # Colors editorial sobre foto con overlay oscuro:
-                # Headline = blanco (no rosa porque rosa sobre rosa+overlay no se lee)
-                # Subhead/body = blanco
-                # CTA = blanco sobre pill rosa
-                # Footer = blanco
                 if o.get("color_hex"):
                     color = _hex_to_rgb(o["color_hex"])
                 elif role == "headline":
-                    color = white  # Blanco para máximo contraste sobre overlay
+                    color = primary  # Rosa brand directo (script Caveat)
                 elif role == "subhead":
-                    color = (245, 245, 245, 255)  # Casi blanco
+                    color = text_dark
                 elif role == "body":
-                    color = (240, 240, 240, 255)
+                    color = text_dark
                 elif role == "cta":
                     color = white  # blanco sobre pill rosa
                 elif role == "footer":
-                    color = (220, 220, 220, 255)
+                    color = text_dark
                 else:
-                    color = white
+                    color = text_dark
 
                 # Background box: solo CTA tiene pill. Resto sin caja
                 # (estilo editorial limpio del Marketing AI target).
