@@ -89,7 +89,11 @@ custom_app.add_middleware(
 
 
 @custom_app.get("/health")
-async def health():
+def health():
+    """Health check sync (NO async) para que responda incluso si el event loop
+    está saturado por un job agentic en curso. FastAPI ejecuta funciones sync
+    en un thread pool aparte — no compite con el loop bloqueado por LLMs.
+    """
     return {"status": "ok", "service": "mediconnect-creative", "version": "1.0"}
 
 
