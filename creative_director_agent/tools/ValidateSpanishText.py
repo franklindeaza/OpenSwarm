@@ -25,13 +25,24 @@ HAIKU_MODEL = "claude-haiku-4-5-20251001"
 PROMPT = """Eres un editor profesional de español dominicano. Te paso una
 imagen generada por IA. Tu única tarea: detectar errores en el texto visible.
 
-DETECTA:
-1. Typos / palabras inventadas (ej. "diecino" en vez de "diciendo", "Optalmologo" en vez de "Oftalmólogo")
-2. Tildes faltantes en palabras que las requieren (ej. "evaluacion" debe ser "evaluación")
-3. Ñ mal escrita o ausente (ej. "ninos" debe ser "niños")
-4. Texto en inglés cuando debería estar en español ("Book Now" en vez de "Reserva")
-5. Palabras médicas mal escritas (Oftalmología, Pediátrica, etc.)
-6. Espacios incorrectos / caracteres raros
+SÉ EXTREMADAMENTE ESTRICTO. Gemini inventa palabras frecuentemente.
+
+DETECTA Y MARCA COMO MAJOR:
+1. Palabras INVENTADAS que no existen en español:
+   - "Podirá" → "Podría"
+   - "unuual" / "inuual" → "inusual"
+   - "péquo" / "tapuon" → palabra mal formada
+   - "diecino" → "diciendo"
+   - "Optalmologo" → "Oftalmólogo"
+   CUALQUIER palabra que no esté en el diccionario español es MAJOR.
+2. Tildes faltantes en palabras comunes (evaluacion→evaluación, podria→podría, perdida→pérdida)
+3. Ñ ausente (ninos→niños, senal→señal)
+4. Texto en inglés (Book Now, Click Here)
+5. Términos médicos mal escritos (Oftalmología, Ginecología, Obstetricia, Pediátrica)
+6. Números o letras sueltos sin contexto ("2.0" suelto al final, glyphs huérfanos)
+7. Mismo texto repetido / sobrepuesto / cortado a la mitad
+8. Más de 3 fonts mezclados sin jerarquía clara
+9. Footer con especialidad incorrecta (si el brief dice "Ginecólogo" y la imagen dice "Médico General" → MAJOR)
 
 DEVUELVE SOLO JSON sin markdown, sin texto extra:
 {
@@ -42,12 +53,14 @@ DEVUELVE SOLO JSON sin markdown, sin texto extra:
   "regenerate_instructions": "..."
 }
 
-publishable=false SI hay UN solo error major (palabra inventada, inglés leak, palabra
-médica mal escrita). Errores minor (1 tilde faltante) pueden pasar.
+REGLA estricta: publishable=false si hay UN solo error major. En la duda, FAIL.
 
-regenerate_instructions: instrucción concreta en inglés para el modelo de imagen
-sobre qué corregir. Ej: "Replace 'diecino' with 'diciendo', replace 'Optalmologo'
-with 'Oftalmólogo Pediátrico' in footer".
+regenerate_instructions: instrucción concreta en inglés MUY específica para
+el modelo de imagen sobre QUÉ corregir y CON QUÉ exacto reemplazar. Ej:
+"CRITICAL FIX: Replace text 'Podirá ser una señal' with 'Podría ser una señal'.
+Replace 'pélvica unuual' with 'pélvica inusual'. Remove stray '2.0' at bottom.
+Footer must say 'Dr. Edward Rijo · Ginecólogo Obstetra' (not 'Médico General').
+Use perfect Spanish spelling — every word must be a real Spanish word."
 """
 
 

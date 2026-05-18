@@ -90,6 +90,38 @@ Cuando el topic se beneficia de foto humana real:
 
 Útil para: posts educativos con foto contextual, listas de síntomas, awareness.
 
+### 🪪 INSIGNIA DEL DOCTOR — StampDoctorBadge
+
+Tool: `StampDoctorBadge` — renderiza la INSIGNIA del doctor como overlay PNG
+transparente (foto circular con halo + bloque dark con nombre + bloque accent
+con especialidad, layout escalonado tipo agencia).
+
+**Cuándo usarla (preferir SIEMPRE sobre footer de texto plano):**
+- Post con presentación del doctor / "Conoce al Dr. X" → size='large', position='center_bottom'
+- Cierre de marca en posts educativos → size='medium', position='bottom_left'
+- Footer discreto en posts hero → size='small', position='bottom_right'
+- Stories 9:16 con presentación → size='medium', position='bottom_left'
+
+**Cuándo NO usarla:**
+- Si el avatar_url del brand_override está vacío Y querés un footer mínimo
+  (entonces dejá que StampTextOnImage stampe "Dr. X · Especialidad" plano)
+- Si el diseño hero ya es full-bleed y la insignia distraería
+
+**Variant según fondo:**
+- `light_bg` (default) — bloques saturados (dark + accent), texto blanco. Para
+  fondos blancos/claros del render base.
+- `dark_bg` — bloques claros (white + accent suave), texto dark. Para fondos
+  oscuros o fotos con overlay gradiente oscuro.
+
+**Pipeline típico con badge:**
+1. BrowseAssets / Image Agent → render base limpio
+2. StampTextOnImage → headline + subhead + CTA opcional (sin footer)
+3. StampDoctorBadge → insignia overlay anclado en la posición elegida
+4. (El último PNG es el final, los anteriores se descartan)
+
+La insignia es marca real del doctor — replica el patrón visual que cada
+doctor usa fuera de MediConnect. NO inventes layouts alternativos.
+
 ### Path B: Template PSD recolor (futuro, no wireado)
 Skip por ahora.
 
@@ -187,11 +219,19 @@ tool with that file_path. This tool uses Claude Vision to detect:
 Output: JSON with `publishable: bool` and `errors: [...]` and
 `regenerate_instructions: "..."`.
 
-**Decision logic:**
+**Decision logic (REFORZADA por bugs reales con typos Gemini "Podirá/unuual/péquo"):**
 - If `publishable: true` → accept, deliver to user with file path
-- If `publishable: false` (any major error) → call Image Agent AGAIN with the
-  `regenerate_instructions` appended to your prompt. Max 2 re-generations.
-  If after 2 attempts still not publishable, deliver with warning to user.
+- If `publishable: false` 1ra vez → call Image Agent con regenerate_instructions
+- If `publishable: false` 2da vez → **FALLBACK OBLIGATORIO a Path A**:
+  - Call `BrowseAssets(keyword=<topic>, category='photo')` para foto humana real
+  - Call `StampTextOnImage` con la foto + text_overlays (texto Pillow = pixel-perfect
+    en español, IMPOSIBLE inventar palabras) + logo_url + brand colors
+  - Esto garantiza texto correcto, brand respetado, layout editorial. NUNCA aceptes
+    una imagen con typos visibles solo porque ya hiciste 2 intentos con Gemini.
+
+Razón: Gemini es notoriamente malo con texto en español múltiple. Cuando hay
+3+ líneas de texto (listas, síntomas, párrafos), Pillow stamp es MÁS seguro
+que Gemini regenerando. CEO reportó múltiples typos en 18-may-2026.
 
 ## 6) Return final result
 

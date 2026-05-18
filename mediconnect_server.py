@@ -130,8 +130,12 @@ async def generate_post(req: GeneratePostRequest):
                 f"  primary_hex: {req.brand_override.get('primary_hex')}\n"
                 f"  secondary_hex: {req.brand_override.get('secondary_hex')}\n"
                 f"  logo_url: {req.brand_override.get('logo_light_url')}\n"
+                f"  avatar_url: {req.brand_override.get('avatar_url')}\n"
                 "El footer del post DEBE decir el nombre del doctor exacto.\n"
                 "El brand color primario DEBE dominar el diseño.\n"
+                "Si avatar_url está disponible, USAR StampDoctorBadge tool para\n"
+                "la presentación del doctor (foto + nombre + especialidad) en\n"
+                "vez de footer de texto plano.\n"
             )
 
         prompt += (
