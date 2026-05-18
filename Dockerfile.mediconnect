@@ -1,0 +1,29 @@
+FROM python:3.13-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+WORKDIR /app
+
+# Minimal system deps for MediConnect Creative microservice.
+# No LibreOffice/Node/Playwright — solo lo que necesitan BrandDirector,
+# CreativeDirector, ImageAgent (Pillow + httpx + sqlalchemy + asyncpg).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl libpq-dev gcc \
+    libcairo2 libpango-1.0-0 libpangoft2-1.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Output dirs
+RUN mkdir -p /app/mnt && chmod -R a+rwx /app/mnt
+
+# Application code
+COPY . .
+
+EXPOSE 8081
+
+CMD ["python", "-u", "mediconnect_server.py"]

@@ -32,6 +32,9 @@ def create_agency(load_threads_callback=None):
     from docs_agent import create_docs_agent
     from video_generation_agent import create_video_generation_agent
     from image_generation_agent import create_image_generation_agent
+    # Custom MediConnect medical agents
+    from brand_director_agent import create_brand_director
+    from creative_director_agent import create_creative_director
 
     orchestrator = create_orchestrator()
     virtual_assistant = create_virtual_assistant()
@@ -41,6 +44,8 @@ def create_agency(load_threads_callback=None):
     docs_agent = create_docs_agent()
     video_generation_agent = create_video_generation_agent()
     image_generation_agent = create_image_generation_agent()
+    brand_director = create_brand_director()
+    creative_director = create_creative_director()
 
     all_agents = [
         orchestrator,
@@ -51,6 +56,8 @@ def create_agency(load_threads_callback=None):
         docs_agent,
         video_generation_agent,
         image_generation_agent,
+        brand_director,
+        creative_director,
     ]
 
     send_message_flows = [
@@ -59,11 +66,18 @@ def create_agency(load_threads_callback=None):
         if specialist is not orchestrator
     ]
 
+    # Restricted handoffs por NOMBRE: NO permitir Creative Director ni
+    # Brand Director → Image Agent (forzaría Gemini synthesis). CD debe
+    # usar sus propias tools (BrowseAssets + StampTextOnImage).
+    BLOCKED_HANDOFFS = {
+        ("Creative Director", "Image Agent"),
+        ("Brand Director", "Image Agent"),
+    }
     handoff_flows = [
         (a > b, Handoff)
         for a in all_agents
         for b in all_agents
-        if a is not b
+        if a is not b and (a.name, b.name) not in BLOCKED_HANDOFFS
     ]
 
     agency = Agency(
