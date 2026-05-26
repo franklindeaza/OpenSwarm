@@ -35,6 +35,7 @@ def create_agency(load_threads_callback=None):
     # Custom MediConnect medical agents
     from brand_director_agent import create_brand_director
     from creative_director_agent import create_creative_director
+    from reel_director_agent import create_reel_director
 
     orchestrator = create_orchestrator()
     virtual_assistant = create_virtual_assistant()
@@ -46,6 +47,7 @@ def create_agency(load_threads_callback=None):
     image_generation_agent = create_image_generation_agent()
     brand_director = create_brand_director()
     creative_director = create_creative_director()
+    reel_director = create_reel_director()
 
     all_agents = [
         orchestrator,
@@ -58,6 +60,7 @@ def create_agency(load_threads_callback=None):
         image_generation_agent,
         brand_director,
         creative_director,
+        reel_director,
     ]
 
     send_message_flows = [

@@ -268,6 +268,104 @@ async def visual_only(req: VisualOnlyRequest):
         return {"success": False, "error": str(e)[:500]}
 
 
+class ReelPlanRequest(BaseModel):
+    """Request para reel-plan: el orquestador genera JSON plan v1 listo para Remotion."""
+    doctor_id: str = Field(..., description="Doctor UUID/email/slug")
+    video_path: str = Field(..., description="Path absoluto al video crudo dentro del container API")
+    topic: str = Field(..., min_length=3, max_length=400)
+    target_duration_sec: float = Field(default=45.0, ge=15, le=90)
+    audience_hint: Optional[str] = None
+    tone_hint: Optional[str] = None
+    brand_override: Optional[dict] = None
+    voice_clone_id: Optional[str] = None
+    apply_audio_cleanup: bool = Field(
+        default=True,
+        description="Si True, el agente puede llamar a CleanAudio (cuesta créditos ElevenLabs)",
+    )
+
+
+@custom_app.post("/api/v1/agentic/reel-plan")
+async def reel_plan(req: ReelPlanRequest):
+    """Orquestador del Reel Director: doctor sube video crudo → emite plan JSON.
+
+    El agente decide tool sequence con autoridad (transcribe, cleanup, cuts,
+    hook, broll, music, compliance, plan). NO ejecuta render — solo plan.
+    """
+    import json as _json
+
+    t0 = time.time()
+    try:
+        from agency_swarm import Agency
+        from reel_director_agent import create_reel_director
+
+        agency = Agency(create_reel_director(), name="ReelDirector")
+
+        brand = req.brand_override or {
+            "primary": "#4F4F4F",
+            "secondary": "#2A2A2A",
+            "accent": "#9CA3AF",
+            "text_dark": "#1F1F1F",
+            "fonts": {"heading": "DejaVu Sans", "body": "DejaVu Sans"},
+            "logo_light_url": "",
+        }
+
+        prompt = (
+            f"Toma este video crudo del doctor y produce el RENDER PLAN v1 JSON.\n\n"
+            f"INPUT:\n"
+            f"  video_path: {req.video_path}\n"
+            f"  doctor_id: {req.doctor_id}\n"
+            f"  topic: {req.topic}\n"
+            f"  audience: {req.audience_hint or 'general'}\n"
+            f"  tone: {req.tone_hint or 'cercano, informativo'}\n"
+            f"  target_duration_sec: {req.target_duration_sec}\n"
+            f"  voice_clone_id: {req.voice_clone_id or 'none'}\n"
+            f"  apply_audio_cleanup: {req.apply_audio_cleanup}\n\n"
+            f"BRAND_KIT:\n{_json.dumps(brand, ensure_ascii=False)}\n\n"
+            f"Secuencia esperada (con autoridad para variar):\n"
+            f"  1. TranscribeVideo({req.video_path})\n"
+            f"  2. (Opcional) CleanAudio si el audio es ruidoso\n"
+            f"  3. PlanCuts con words+duration\n"
+            f"  4. DetectHook 3-5s más impactantes\n"
+            f"  5. PlanBroll queries médicos por especialidad\n"
+            f"  6. SelectMood\n"
+            f"  7. ValidateCompliance — BLOQUEANTE si severity=error\n"
+            f"  8. BuildRenderPlan consolidando todo\n\n"
+            f"Devuelve SOLO el JSON final de BuildRenderPlan.run()."
+        )
+
+        result = agency.get_response_sync(prompt)
+        text = result.final_output if hasattr(result, "final_output") else str(result)
+
+        plan = None
+        try:
+            start = text.find("{")
+            if start >= 0:
+                depth = 0
+                end = -1
+                for i, ch in enumerate(text[start:], start=start):
+                    if ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0:
+                            end = i
+                            break
+                if end > start:
+                    plan = _json.loads(text[start : end + 1])
+        except Exception as e:
+            logger.warning(f"reel-plan parse warning: {e}")
+
+        return {
+            "success": True,
+            "elapsed_seconds": round(time.time() - t0, 1),
+            "plan": plan,
+            "raw_output": text[:3000] if plan is None else None,
+        }
+    except Exception as e:
+        logger.exception("reel_plan failed")
+        return {"success": False, "error": str(e)[:500], "elapsed_seconds": round(time.time() - t0, 1)}
+
+
 @custom_app.get("/api/v1/agentic/file/{path:path}")
 async def serve_file(path: str):
     """Serve generated images. Tries both /app/mnt (container) and
