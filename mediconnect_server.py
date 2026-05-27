@@ -268,6 +268,60 @@ async def visual_only(req: VisualOnlyRequest):
         return {"success": False, "error": str(e)[:500]}
 
 
+def _normalize_render_plan(plan: dict) -> dict:
+    """Normaliza el plan emitido al schema que DoctorVideoReelV2 espera.
+
+    El LLM a veces sintetiza el JSON él mismo en vez de llamar BuildRenderPlan
+    y termina usando keys nombre-de-tool (hook_style, captions_spec) en lugar
+    de keys de schema (hook, captions). Aquí mapeamos y aseguramos que
+    plan["remotion"]["props"]["directorPlan"] esté presente listo para Remotion.
+
+    Idempotente: si ya está en el formato correcto no hace nada.
+    """
+    if not isinstance(plan, dict):
+        return plan
+
+    # Si el wrapper es {ok, plan: {...}} extraer el inner
+    inner = plan
+    wrapper_keys = set(plan.keys())
+    if wrapper_keys <= {"ok", "reel_id", "plan", "blocked_by_compliance", "compliance", "message"} and isinstance(plan.get("plan"), dict):
+        inner = plan["plan"]
+
+    dp = inner.get("director_plan") or {}
+
+    # Map keys nombre-de-tool / sintetizadas por LLM → keys del schema template
+    key_mapping = {
+        "hook_style":        "hook",
+        "captions_spec":     "captions",
+        "captions_style":    "captions",
+        "logo_spec":         "logo",
+        "lower_third_spec":  "lower_third",
+        "end_card_spec":     "end_card",
+        "brand_stripe_spec": "brand_stripe",
+        "music_mix":         "music",
+        "music_spec":        "music",
+    }
+    normalized_dp = {}
+    for k, v in dp.items():
+        target = key_mapping.get(k, k)
+        normalized_dp[target] = v
+    inner["director_plan"] = normalized_dp
+
+    # Asegurar que plan["remotion"]["props"]["directorPlan"] esté presente
+    remotion = inner.setdefault("remotion", {})
+    props = remotion.setdefault("props", {})
+    if "directorPlan" not in props:
+        props["directorPlan"] = normalized_dp
+
+    # Si broll quedó al toplevel del plan pero director_plan["broll"] está vacío,
+    # copiarlo al director plan (algunos LLMs lo separan)
+    if not normalized_dp.get("broll") and inner.get("broll"):
+        normalized_dp["broll"] = inner["broll"]
+        props["directorPlan"]["broll"] = inner["broll"]
+
+    return plan
+
+
 class ReelPlanRequest(BaseModel):
     """Request para reel-plan: el orquestador genera JSON plan v1 listo para Remotion."""
     doctor_id: str = Field(..., description="Doctor UUID/email/slug")
@@ -336,29 +390,67 @@ async def reel_plan(req: ReelPlanRequest):
         result = agency.get_response_sync(prompt)
         text = result.final_output if hasattr(result, "final_output") else str(result)
 
+        # CRÍTICO (CEO 27-may "el orquestador es el diseñador"): el plan AUTORITATIVO
+        # es el output bruto de BuildRenderPlan, NO la prosa final del LLM. El LLM
+        # tiende a re-sintetizar el JSON con keys distintas a las que el template
+        # espera. Por eso recorremos new_items hacia atrás y extraemos el output
+        # de la última tool BuildRenderPlan ejecutada.
         plan = None
+        tool_source = None
         try:
-            start = text.find("{")
-            if start >= 0:
-                depth = 0
-                end = -1
-                for i, ch in enumerate(text[start:], start=start):
-                    if ch == "{":
-                        depth += 1
-                    elif ch == "}":
-                        depth -= 1
-                        if depth == 0:
-                            end = i
-                            break
-                if end > start:
-                    plan = _json.loads(text[start : end + 1])
+            new_items = getattr(result, "new_items", []) or []
+            for item in reversed(new_items):
+                # Detección genérica: el item es tool output si tiene `.output`
+                # y su raw_item.name == "BuildRenderPlan" (o lo trae en su repr)
+                raw = getattr(item, "raw_item", None)
+                tool_name = None
+                if raw is not None:
+                    tool_name = getattr(raw, "name", None) or (raw.get("name") if isinstance(raw, dict) else None)
+                output_str = getattr(item, "output", None)
+                if not output_str:
+                    continue
+                if tool_name != "BuildRenderPlan":
+                    continue
+                # Output de la tool es el JSON {ok, reel_id, plan} que retorna BuildRenderPlan.run()
+                parsed = _json.loads(output_str)
+                if isinstance(parsed, dict) and (parsed.get("plan") or parsed.get("ok") is not None):
+                    plan = parsed
+                    tool_source = "BuildRenderPlan.output"
+                    break
         except Exception as e:
-            logger.warning(f"reel-plan parse warning: {e}")
+            logger.warning(f"reel-plan tool-output extraction warning: {e}")
+
+        # Fallback: parsear el texto del LLM (legacy, menos confiable)
+        if plan is None:
+            try:
+                start = text.find("{")
+                if start >= 0:
+                    depth = 0
+                    end = -1
+                    for i, ch in enumerate(text[start:], start=start):
+                        if ch == "{":
+                            depth += 1
+                        elif ch == "}":
+                            depth -= 1
+                            if depth == 0:
+                                end = i
+                                break
+                    if end > start:
+                        plan = _json.loads(text[start : end + 1])
+                        tool_source = "llm_text_parse"
+            except Exception as e:
+                logger.warning(f"reel-plan llm-text parse warning: {e}")
+
+        # Normalizar plan al schema esperado por el template aunque el LLM lo
+        # haya sintetizado raro. Garantiza compatibilidad con DoctorVideoReelV2.
+        if isinstance(plan, dict):
+            plan = _normalize_render_plan(plan)
 
         return {
             "success": True,
             "elapsed_seconds": round(time.time() - t0, 1),
             "plan": plan,
+            "plan_source": tool_source,
             "raw_output": text[:3000] if plan is None else None,
         }
     except Exception as e:

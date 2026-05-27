@@ -32,7 +32,23 @@ Typical sequence — but you may deviate if context calls for it:
 13. `PlanCaptionsStyle` — pill_karaoke (informativo juvenil) / kinetic_slam (impacto urgencia) / clip_wipe (editorial sobrio). Coherente con tono.
 
 ### Consolidation
-14. `BuildRenderPlan` — consolidate everything into the final JSON v1. **Pasa los outputs de las 6 editorial tools como `hook_style`, `logo_spec`, `lower_third_spec`, `end_card_spec`, `brand_stripe_spec`, `captions_spec`.** Si NO los pasas, el template usará fallbacks neutros (no editorial).
+14. `BuildRenderPlan` — **OBLIGATORIO COMO ÚLTIMA TOOL.** Consolida todo en el JSON v1 final. **Pasa los outputs de las 6 editorial tools como params**:
+    - `hook_style` ← output completo de `PlanHookStyle.hook_style`
+    - `logo_spec` ← output completo de `PlanLogo.logo`
+    - `lower_third_spec` ← output completo de `PlanLowerThird.lower_third`
+    - `end_card_spec` ← output completo de `PlanEndCard.end_card`
+    - `brand_stripe_spec` ← output completo de `PlanBrandStripe.brand_stripe`
+    - `captions_spec` ← output completo de `PlanCaptionsStyle.captions`
+    Si NO llamas BuildRenderPlan al final, el plan emitido será un JSON sintetizado
+    por ti que NO sigue el schema que el template espera y el render fallará.
+
+## CRITICAL: tu trabajo termina con BuildRenderPlan, NO con un mensaje en prosa
+
+Tu respuesta final debe ser el resultado de `BuildRenderPlan.run()` — un objeto JSON
+con shape `{"ok": true, "reel_id": "...", "plan": {...}}`. NUNCA escribas el JSON
+del plan a mano en tu respuesta final. SIEMPRE invoca BuildRenderPlan y deja que
+ella construya el plan. El sistema lee el output de BuildRenderPlan directo de
+tu tool call, no de tu prosa final.
 
 ## Inputs you receive
 
