@@ -53,7 +53,35 @@ class BuildRenderPlan(BaseTool):
     )
     captions_style: str = Field(
         default="pill_karaoke",
-        description="Estilo captions: pill_karaoke|kinetic_slam|clip_wipe|highlight",
+        description="Estilo captions: pill_karaoke|kinetic_slam|clip_wipe|highlight (legacy — preferir hook_style/captions_spec via director_plan_overrides)",
+    )
+
+    # ───── DirectorPlan editorial (autoridad del agente) ─────
+    # Cada uno proviene del .run() de la tool correspondiente, parsed.
+    # Si None, fallback al comportamiento legacy del template.
+    hook_style: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Output de PlanHookStyle.hook_style — cinematic_zoom/punch_in/static/none + duración + zoom params",
+    )
+    logo_spec: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Output de PlanLogo.logo — position, height, background, animation",
+    )
+    lower_third_spec: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Output de PlanLowerThird.lower_third — enabled, appear_at, duration, position, background_style",
+    )
+    end_card_spec: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Output de PlanEndCard.end_card — duration, background_style, cta_text, show_doctor_name",
+    )
+    brand_stripe_spec: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Output de PlanBrandStripe.brand_stripe — enabled, width, side, opacity, color",
+    )
+    captions_spec: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Output de PlanCaptionsStyle.captions — style, uppercase, bottom_offset, colors (override captions_style legacy)",
     )
 
     def run(self) -> str:
@@ -75,6 +103,58 @@ class BuildRenderPlan(BaseTool):
 
         final_duration = min(self.target_duration_sec, kept_duration) if kept_duration > 0 else self.target_duration_sec
 
+        # Construir DirectorPlan editorial — autoridad total del agente
+        director_plan = {
+            "hook": self.hook_style or {
+                # Fallback: derivar del hook segment con tratamiento safe cinematic_zoom
+                "type": "cinematic_zoom",
+                "duration_sec": float(self.hook.get("end", 0)) - float(self.hook.get("start", 0)),
+                "zoom_from": 1.12,
+                "zoom_to": 1.0,
+            },
+            "brand_stripe": self.brand_stripe_spec or {
+                "enabled": True, "width_px": 8, "side": "left", "opacity": 0.85,
+            },
+            "broll": self.broll,  # ya viene con position/size/border/opacity desde PlanBroll
+            "logo": self.logo_spec or {
+                "enabled": bool(self.brand_kit.get("logo_light_url")),
+                "position": {"top": 50, "right": 50},
+                "height_px": 80,
+                "background": "rgba(255,255,255,0.88)",
+                "padding_px": 14,
+                "border_radius": 16,
+                "appear_animation": "bounce_in",
+            },
+            "lower_third": self.lower_third_spec or {
+                "enabled": True,
+                "appear_at_sec": 1.0,
+                "visible_duration_sec": 4.0,
+                "position": {"left": 60, "bottom": 340},
+                "background_style": "gradient",
+                "border_radius": 12,
+            },
+            "captions": self.captions_spec or {
+                "enabled": True,
+                "style": self.captions_style,
+                "bottom_offset": 220,
+                "uppercase": True,
+                "background": "rgba(0,0,0,0.78)",
+                "text_color": "#FFFFFF",
+                "max_width_pct": 88,
+            },
+            "end_card": self.end_card_spec or {
+                "enabled": True,
+                "duration_sec": 3.0,
+                "background_style": "gradient_brand",
+                "show_doctor_name": True,
+                "cta_text": "Agenda tu cita",
+            },
+            "music": {
+                "volume": (self.music or {}).get("volume", 0.18),
+                "duck_db": (self.music or {}).get("duck_db", -14),
+            },
+        }
+
         plan = {
             "version": "v1",
             "reel_id": reel_id,
@@ -92,7 +172,8 @@ class BuildRenderPlan(BaseTool):
             "broll": self.broll,
             "music": self.music,
             "compliance": self.compliance,
-            "captions": {
+            "director_plan": director_plan,  # ← editorial completo (orquestador es el diseñador)
+            "captions": {  # ← bloque legacy (orchestrator/template aún lo lee como fallback)
                 "style": self.captions_style,
                 "font": (self.brand_kit.get("fonts") or {}).get("body", "DejaVu Sans"),
                 "heading_font": (self.brand_kit.get("fonts") or {}).get("heading", "DejaVu Sans"),
@@ -107,7 +188,7 @@ class BuildRenderPlan(BaseTool):
                     "doctorName": self.doctor.get("name", "Dr."),
                     "specialty": self.doctor.get("specialty", ""),
                     "title": "",
-                    "cta": "Agenda tu cita",
+                    "cta": director_plan["end_card"].get("cta_text", "Agenda tu cita"),
                     "brandColors": {
                         "primary": self.brand_kit.get("primary", "#4F4F4F"),
                         "secondary": self.brand_kit.get("secondary", "#2A2A2A"),
@@ -117,12 +198,14 @@ class BuildRenderPlan(BaseTool):
                     "fonts": self.brand_kit.get("fonts", {"heading": "DejaVu Sans", "body": "DejaVu Sans"}),
                     "logoLightUrl": self.brand_kit.get("logo_light_url", ""),
                     "captionWords": self.transcript.get("words", []),
-                    "captionStyle": self.captions_style,
+                    # ↓ DirectorPlan completo — el template lo lee y todo el resto se ignora si viene
+                    "directorPlan": director_plan,
+                    # ↓ Legacy props (template fallback si directorPlan ausente)
+                    "captionStyle": director_plan["captions"]["style"],
                     "hookStart": self.hook.get("start", 0),
                     "hookEnd": self.hook.get("end", 0),
                     "musicMood": self.music.get("mood"),
-                    "musicBpmTarget": self.music.get("bpm_target"),
-                    "musicDuckDb": self.music.get("duck_db", -14),
+                    "musicDuckDb": director_plan["music"].get("duck_db"),
                     "brollPlan": self.broll,
                 },
             },
