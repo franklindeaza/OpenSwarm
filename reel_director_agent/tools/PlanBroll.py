@@ -7,6 +7,10 @@ inserto:
   - duración (2-3s recomendado)
   - query semántico para BrowseAssets (Envato library médica curada)
   - mode: "picture-in-picture" (default) o "full-bleed" o "split"
+  - opacity (opcional): 0..1 — el orquestador decide. Default 1.0:
+      * full-bleed → 1.0 cubre completamente (recomendado para reels limpios)
+      * 0.7-0.9 → muestra el doctor base detrás con tinte (estilo overlay)
+      * picture-in-picture y split ignoran opacity (son boxes separados)
 
 Reglas duras:
 - Max 4 B-rolls por 60s de reel (no saturar)
@@ -36,7 +40,8 @@ class PlanBroll(BaseTool):
         ...,
         description=(
             "Lista de B-roll inserts. Cada item: "
-            "{at: sec, duration: sec, query: str, mode: 'picture-in-picture'|'full-bleed'|'split'}"
+            "{at: sec, duration: sec, query: str, mode: 'picture-in-picture'|'full-bleed'|'split', "
+            "opacity?: 0..1 (solo aplica a full-bleed, default 1.0)}"
         ),
     )
     reel_duration_sec: float = Field(
@@ -78,12 +83,16 @@ class PlanBroll(BaseTool):
                 warnings.append(f"insert_{i}_empty_query")
                 continue
 
-            validated.append({
+            entry = {
                 "at": round(at, 3),
                 "duration": round(dur, 3),
                 "query": query,
                 "mode": mode,
-            })
+            }
+            if "opacity" in ins and ins["opacity"] is not None:
+                op = max(0.0, min(1.0, float(ins["opacity"])))
+                entry["opacity"] = round(op, 3)
+            validated.append(entry)
             last_end = at + dur
 
         # Cap a 4 por minuto
