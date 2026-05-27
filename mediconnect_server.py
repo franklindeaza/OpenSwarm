@@ -338,16 +338,117 @@ class ReelPlanRequest(BaseModel):
     )
 
 
+def _extract_buildrenderplan_output(result) -> Optional[dict]:
+    """Recorre new_items hacia atrás y devuelve el output PARSED de la última
+    tool call BuildRenderPlan ejecutada. None si no se ejecutó.
+    """
+    import json as _json
+    new_items = getattr(result, "new_items", []) or []
+    for item in reversed(new_items):
+        raw = getattr(item, "raw_item", None)
+        tool_name = None
+        if raw is not None:
+            tool_name = getattr(raw, "name", None) or (raw.get("name") if isinstance(raw, dict) else None)
+        output_str = getattr(item, "output", None)
+        if not output_str or tool_name != "BuildRenderPlan":
+            continue
+        try:
+            parsed = _json.loads(output_str)
+        except Exception:
+            continue
+        if isinstance(parsed, dict) and (parsed.get("plan") or parsed.get("ok") is not None):
+            return parsed
+    return None
+
+
+def _list_tools_called(result) -> list[str]:
+    """Lista nombres de tools efectivamente ejecutadas durante el run, en orden."""
+    names: list[str] = []
+    new_items = getattr(result, "new_items", []) or []
+    for item in new_items:
+        raw = getattr(item, "raw_item", None)
+        if raw is None:
+            continue
+        name = getattr(raw, "name", None) or (raw.get("name") if isinstance(raw, dict) else None)
+        # Solo cuento items que tengan output (= tool call con response)
+        if name and getattr(item, "output", None):
+            names.append(name)
+    return names
+
+
+# Build retry prompts cada vez más estrictos. attempt=0 es el original; 1 y 2 son retries.
+def _build_reel_prompt(req: "ReelPlanRequest", brand: dict, attempt: int = 0) -> str:
+    import json as _json
+    base = (
+        f"Toma este video crudo del doctor y produce el RENDER PLAN v1 JSON.\n\n"
+        f"INPUT:\n"
+        f"  video_path: {req.video_path}\n"
+        f"  doctor_id: {req.doctor_id}\n"
+        f"  topic: {req.topic}\n"
+        f"  audience: {req.audience_hint or 'general'}\n"
+        f"  tone: {req.tone_hint or 'cercano, informativo'}\n"
+        f"  target_duration_sec: {req.target_duration_sec}\n"
+        f"  voice_clone_id: {req.voice_clone_id or 'none'}\n"
+        f"  apply_audio_cleanup: {req.apply_audio_cleanup}\n\n"
+        f"BRAND_KIT:\n{_json.dumps(brand, ensure_ascii=False)}\n\n"
+        f"Secuencia (autoridad para variar el contenido, NO la última tool):\n"
+        f"  1. TranscribeVideo\n"
+        f"  2. (opcional) CleanAudio\n"
+        f"  3. PlanCuts\n"
+        f"  4. DetectHook\n"
+        f"  5. PlanBroll (decide queries, position, size, transitions)\n"
+        f"  6. SelectMood\n"
+        f"  7. ValidateCompliance (BLOQUEANTE si error)\n"
+        f"  8. PlanHookStyle (cinematic_zoom/punch_in/static/none)\n"
+        f"  9. PlanLogo (position, height, background, animation)\n"
+        f" 10. PlanLowerThird (enabled, appear_at, position, background_style)\n"
+        f" 11. PlanEndCard (duration, background_style, cta_text)\n"
+        f" 12. PlanBrandStripe (enabled, width, side, opacity)\n"
+        f" 13. PlanCaptionsStyle (style, uppercase, bottom_offset, colors)\n"
+        f" 14. BuildRenderPlan(passing outputs of 8-13 as hook_style/logo_spec/etc params)\n\n"
+    )
+    if attempt == 0:
+        return base + (
+            "DEBES llamar BuildRenderPlan como última tool. "
+            "El sistema lee su output, NO tu mensaje final.\n"
+        )
+    elif attempt == 1:
+        return base + (
+            "VIOLATION DETECTED en intento previo: NO llamaste a BuildRenderPlan. "
+            "El sistema rechazó la respuesta porque el plan AUTORITATIVO sólo proviene "
+            "del tool call BuildRenderPlan, NO de tu prosa final.\n\n"
+            "AHORA EJECUTA: TranscribeVideo → DetectHook → PlanBroll → SelectMood → "
+            "ValidateCompliance → PlanHookStyle → PlanLogo → PlanLowerThird → "
+            "PlanEndCard → PlanBrandStripe → PlanCaptionsStyle → BuildRenderPlan.\n"
+            "La tool BuildRenderPlan ES TU SALIDA. NO escribas el JSON en prosa.\n"
+        )
+    else:  # attempt 2+ — último intento
+        return base + (
+            "🚨 ÚLTIMO INTENTO 🚨\n"
+            "Los 2 intentos previos fallaron porque no invocaste BuildRenderPlan.\n"
+            "Esta es la última oportunidad. Tu respuesta DEBE ser literalmente:\n"
+            "  1) Una secuencia de tool_calls que termina con BuildRenderPlan\n"
+            "  2) Ningún JSON inline en tu mensaje final\n"
+            "Si fallas otra vez, el endpoint devolverá 422 y el doctor no recibirá su reel.\n"
+        )
+
+
 @custom_app.post("/api/v1/agentic/reel-plan")
 async def reel_plan(req: ReelPlanRequest):
     """Orquestador del Reel Director: doctor sube video crudo → emite plan JSON.
 
-    El agente decide tool sequence con autoridad (transcribe, cleanup, cuts,
-    hook, broll, music, compliance, plan). NO ejecuta render — solo plan.
+    Política estricta CEO 27-may "el orquestador es el diseñador": el plan
+    AUTORITATIVO solo se acepta del output bruto de BuildRenderPlan. Si el LLM
+    se salta esa tool, el endpoint reintenta hasta MAX_ATTEMPTS con prompt
+    progresivamente más estricto, luego devuelve 422.
     """
     import json as _json
 
+    MAX_ATTEMPTS = 3
     t0 = time.time()
+    attempts_log: list[dict] = []
+    last_text = ""
+
     try:
         from agency_swarm import Agency
         from reel_director_agent import create_reel_director
@@ -363,99 +464,69 @@ async def reel_plan(req: ReelPlanRequest):
             "logo_light_url": "",
         }
 
-        prompt = (
-            f"Toma este video crudo del doctor y produce el RENDER PLAN v1 JSON.\n\n"
-            f"INPUT:\n"
-            f"  video_path: {req.video_path}\n"
-            f"  doctor_id: {req.doctor_id}\n"
-            f"  topic: {req.topic}\n"
-            f"  audience: {req.audience_hint or 'general'}\n"
-            f"  tone: {req.tone_hint or 'cercano, informativo'}\n"
-            f"  target_duration_sec: {req.target_duration_sec}\n"
-            f"  voice_clone_id: {req.voice_clone_id or 'none'}\n"
-            f"  apply_audio_cleanup: {req.apply_audio_cleanup}\n\n"
-            f"BRAND_KIT:\n{_json.dumps(brand, ensure_ascii=False)}\n\n"
-            f"Secuencia esperada (con autoridad para variar):\n"
-            f"  1. TranscribeVideo({req.video_path})\n"
-            f"  2. (Opcional) CleanAudio si el audio es ruidoso\n"
-            f"  3. PlanCuts con words+duration\n"
-            f"  4. DetectHook 3-5s más impactantes\n"
-            f"  5. PlanBroll queries médicos por especialidad\n"
-            f"  6. SelectMood\n"
-            f"  7. ValidateCompliance — BLOQUEANTE si severity=error\n"
-            f"  8. BuildRenderPlan consolidando todo\n\n"
-            f"Devuelve SOLO el JSON final de BuildRenderPlan.run()."
-        )
-
-        result = agency.get_response_sync(prompt)
-        text = result.final_output if hasattr(result, "final_output") else str(result)
-
-        # CRÍTICO (CEO 27-may "el orquestador es el diseñador"): el plan AUTORITATIVO
-        # es el output bruto de BuildRenderPlan, NO la prosa final del LLM. El LLM
-        # tiende a re-sintetizar el JSON con keys distintas a las que el template
-        # espera. Por eso recorremos new_items hacia atrás y extraemos el output
-        # de la última tool BuildRenderPlan ejecutada.
         plan = None
         tool_source = None
-        try:
-            new_items = getattr(result, "new_items", []) or []
-            for item in reversed(new_items):
-                # Detección genérica: el item es tool output si tiene `.output`
-                # y su raw_item.name == "BuildRenderPlan" (o lo trae en su repr)
-                raw = getattr(item, "raw_item", None)
-                tool_name = None
-                if raw is not None:
-                    tool_name = getattr(raw, "name", None) or (raw.get("name") if isinstance(raw, dict) else None)
-                output_str = getattr(item, "output", None)
-                if not output_str:
-                    continue
-                if tool_name != "BuildRenderPlan":
-                    continue
-                # Output de la tool es el JSON {ok, reel_id, plan} que retorna BuildRenderPlan.run()
-                parsed = _json.loads(output_str)
-                if isinstance(parsed, dict) and (parsed.get("plan") or parsed.get("ok") is not None):
-                    plan = parsed
-                    tool_source = "BuildRenderPlan.output"
-                    break
-        except Exception as e:
-            logger.warning(f"reel-plan tool-output extraction warning: {e}")
 
-        # Fallback: parsear el texto del LLM (legacy, menos confiable)
+        for attempt in range(MAX_ATTEMPTS):
+            prompt = _build_reel_prompt(req, brand, attempt=attempt)
+            result = agency.get_response_sync(prompt)
+            last_text = result.final_output if hasattr(result, "final_output") else str(result)
+
+            tools_called = _list_tools_called(result)
+            extracted = _extract_buildrenderplan_output(result)
+            if extracted is not None:
+                plan = extracted
+                tool_source = "BuildRenderPlan.output"
+                attempts_log.append({
+                    "attempt": attempt,
+                    "source": tool_source,
+                    "ok": True,
+                    "tools_called": tools_called,
+                })
+                break
+
+            attempts_log.append({
+                "attempt": attempt,
+                "source": "llm_text_only",
+                "ok": False,
+                "reason": "BuildRenderPlan tool call not found in new_items",
+                "tools_called": tools_called,
+            })
+            logger.warning(f"reel-plan attempt {attempt} skipped BuildRenderPlan. Tools called: {tools_called}")
+
+        # Si tras MAX_ATTEMPTS sigue sin BuildRenderPlan → 422 (no aceptamos plan sintetizado)
         if plan is None:
-            try:
-                start = text.find("{")
-                if start >= 0:
-                    depth = 0
-                    end = -1
-                    for i, ch in enumerate(text[start:], start=start):
-                        if ch == "{":
-                            depth += 1
-                        elif ch == "}":
-                            depth -= 1
-                            if depth == 0:
-                                end = i
-                                break
-                    if end > start:
-                        plan = _json.loads(text[start : end + 1])
-                        tool_source = "llm_text_parse"
-            except Exception as e:
-                logger.warning(f"reel-plan llm-text parse warning: {e}")
+            return {
+                "success": False,
+                "error": "llm_skipped_buildrenderplan",
+                "message": (
+                    f"El agente Reel Director NO invocó BuildRenderPlan en {MAX_ATTEMPTS} intentos. "
+                    "El sistema rechaza planes sintetizados por el LLM porque no garantizan "
+                    "el schema esperado por el template. Revisar instructions.md o el modelo."
+                ),
+                "attempts": attempts_log,
+                "elapsed_seconds": round(time.time() - t0, 1),
+                "last_llm_text": last_text[:1500],
+            }
 
-        # Normalizar plan al schema esperado por el template aunque el LLM lo
-        # haya sintetizado raro. Garantiza compatibilidad con DoctorVideoReelV2.
-        if isinstance(plan, dict):
-            plan = _normalize_render_plan(plan)
+        # Normalizar plan (defensa adicional aunque venga de BuildRenderPlan)
+        plan = _normalize_render_plan(plan)
 
         return {
             "success": True,
             "elapsed_seconds": round(time.time() - t0, 1),
             "plan": plan,
             "plan_source": tool_source,
-            "raw_output": text[:3000] if plan is None else None,
+            "attempts": attempts_log,
         }
     except Exception as e:
         logger.exception("reel_plan failed")
-        return {"success": False, "error": str(e)[:500], "elapsed_seconds": round(time.time() - t0, 1)}
+        return {
+            "success": False,
+            "error": str(e)[:500],
+            "elapsed_seconds": round(time.time() - t0, 1),
+            "attempts": attempts_log,
+        }
 
 
 @custom_app.get("/api/v1/agentic/file/{path:path}")
