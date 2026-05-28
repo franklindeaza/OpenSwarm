@@ -45,4 +45,13 @@ class CleanAudio(BaseTool):
             )
         except Exception as e:
             return json.dumps({"error": f"clean_audio_failed: {e}"})
+        # Backend puede degradar gracefully (audio_isolation scope missing)
+        if result.get("skipped"):
+            return json.dumps({
+                "skipped": True,
+                "reason": result.get("reason"),
+                "message": result.get("message"),
+                "audio_path": result.get("audio_path"),
+                "note": "El audio original se usará sin limpiar. CONTINÚA el flow sin retry — NO vuelvas a llamar CleanAudio.",
+            }, ensure_ascii=False)
         return json.dumps(result.get("data", {}), ensure_ascii=False)
