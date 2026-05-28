@@ -338,19 +338,50 @@ class ReelPlanRequest(BaseModel):
     )
 
 
+def _build_callid_name_map(items) -> dict[str, str]:
+    """Construye {call_id → tool_name} desde los ToolCallItem en new_items.
+
+    ToolCallItem.raw_item es ResponseFunctionToolCall con .name y .call_id.
+    ToolCallOutputItem.raw_item es dict con call_id + output (sin .name).
+    Esta función es el join entre ambos.
+    """
+    callid_to_name: dict[str, str] = {}
+    for item in items:
+        if type(item).__name__ != "ToolCallItem":
+            continue
+        raw = getattr(item, "raw_item", None)
+        if raw is None:
+            continue
+        name = getattr(raw, "name", None)
+        call_id = getattr(raw, "call_id", None)
+        if name and call_id:
+            callid_to_name[call_id] = name
+    return callid_to_name
+
+
 def _extract_buildrenderplan_output(result) -> Optional[dict]:
     """Recorre new_items hacia atrás y devuelve el output PARSED de la última
     tool call BuildRenderPlan ejecutada. None si no se ejecutó.
+
+    Matchea ToolCallOutputItem.raw_item["call_id"] contra ToolCallItem.raw_item.call_id
+    para identificar qué tool produjo qué output.
     """
     import json as _json
     new_items = getattr(result, "new_items", []) or []
+    callid_to_name = _build_callid_name_map(new_items)
+
     for item in reversed(new_items):
+        if type(item).__name__ != "ToolCallOutputItem":
+            continue
         raw = getattr(item, "raw_item", None)
-        tool_name = None
-        if raw is not None:
-            tool_name = getattr(raw, "name", None) or (raw.get("name") if isinstance(raw, dict) else None)
-        output_str = getattr(item, "output", None)
-        if not output_str or tool_name != "BuildRenderPlan":
+        if not isinstance(raw, dict):
+            continue
+        call_id = raw.get("call_id")
+        tool_name = callid_to_name.get(call_id)
+        if tool_name != "BuildRenderPlan":
+            continue
+        output_str = item.output if hasattr(item, "output") else raw.get("output")
+        if not output_str:
             continue
         try:
             parsed = _json.loads(output_str)
@@ -362,16 +393,19 @@ def _extract_buildrenderplan_output(result) -> Optional[dict]:
 
 
 def _list_tools_called(result) -> list[str]:
-    """Lista nombres de tools efectivamente ejecutadas durante el run, en orden."""
-    names: list[str] = []
+    """Lista nombres de tools efectivamente ejecutadas (= con response) en orden."""
     new_items = getattr(result, "new_items", []) or []
+    callid_to_name = _build_callid_name_map(new_items)
+    names: list[str] = []
     for item in new_items:
-        raw = getattr(item, "raw_item", None)
-        if raw is None:
+        if type(item).__name__ != "ToolCallOutputItem":
             continue
-        name = getattr(raw, "name", None) or (raw.get("name") if isinstance(raw, dict) else None)
-        # Solo cuento items que tengan output (= tool call con response)
-        if name and getattr(item, "output", None):
+        raw = getattr(item, "raw_item", None)
+        if not isinstance(raw, dict):
+            continue
+        call_id = raw.get("call_id")
+        name = callid_to_name.get(call_id)
+        if name:
             names.append(name)
     return names
 
@@ -521,9 +555,32 @@ async def reel_plan(req: ReelPlanRequest):
         }
     except Exception as e:
         logger.exception("reel_plan failed")
+        err_str = str(e)
+        err_str_lower = err_str.lower()
+        # Detectar errores comunes y devolver mensaje accionable al frontend
+        if "credit balance" in err_str_lower or "credits" in err_str_lower and "insufficient" in err_str_lower:
+            user_msg = (
+                "Anthropic credits agotados. Recarga en https://console.anthropic.com/settings/billing "
+                "y reintenta."
+            )
+            error_code = "anthropic_credits_exhausted"
+        elif "rate_limit" in err_str_lower or "429" in err_str_lower:
+            user_msg = "Rate limit Anthropic. Espera 1-2 minutos y reintenta."
+            error_code = "anthropic_rate_limit"
+        elif "api_key" in err_str_lower or "401" in err_str_lower or "authentication" in err_str_lower:
+            user_msg = "API key Anthropic inválida o expirada. Verificar config."
+            error_code = "anthropic_auth_failed"
+        elif "timeout" in err_str_lower or "timed out" in err_str_lower:
+            user_msg = "Timeout llamando al LLM. Reintenta — si persiste, problema de red al provider."
+            error_code = "llm_timeout"
+        else:
+            user_msg = "Error inesperado al generar el plan. Revisar logs del Creative Engine."
+            error_code = "unknown"
         return {
             "success": False,
-            "error": str(e)[:500],
+            "error": error_code,
+            "message": user_msg,
+            "debug": err_str[:500],
             "elapsed_seconds": round(time.time() - t0, 1),
             "attempts": attempts_log,
         }
